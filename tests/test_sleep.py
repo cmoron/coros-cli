@@ -4,7 +4,11 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from coros_cli.api.mobile import CorosApiError, fetch_sleep
-from coros_cli.endpoints import MOBILE_BASE_URLS, MOBILE_LOGIN, MOBILE_SLEEP_DAILY
+from coros_cli.endpoints import (
+    MOBILE_BASE_URLS,
+    MOBILE_LOGIN,
+    MOBILE_SLEEP_DAILY,
+)
 from coros_cli.models import StoredAuth
 
 
@@ -105,3 +109,56 @@ async def test_fetch_sleep_handles_empty_list(httpx_mock: HTTPXMock) -> None:
     )
     _, records = await fetch_sleep(_auth(), "20260410", "20260410")
     assert records == []
+
+
+async def test_fetch_sleep_merges_hrv_when_userid_present(httpx_mock: HTTPXMock) -> None:
+    from coros_cli.endpoints import WEB_ANALYSE_DAY_DETAIL, WEB_BASE_URLS
+
+    auth = _auth().model_copy(update={"user_id": "u1", "web_access_token": "web"})
+    httpx_mock.add_response(
+        url=f"{MOBILE_BASE_URLS['eu']}{MOBILE_SLEEP_DAILY}?accessToken=tok",
+        json=_sleep_response([_day("20260410"), _day("20260411")]),
+    )
+    httpx_mock.add_response(
+        url=f"{WEB_BASE_URLS['eu']}{WEB_ANALYSE_DAY_DETAIL}?startDay=20260410&endDay=20260411",
+        json={
+            "result": "0000",
+            "data": {
+                "dayList": [
+                    {
+                        "happenDay": 20260410,
+                        "avgSleepHrv": 58,
+                        "sleepHrvBase": 55,
+                        "sleepHrvIntervalList": [30, 45, 50, 65],
+                    },
+                    {
+                        "happenDay": 20260411,
+                        "avgSleepHrv": 0,
+                        "sleepHrvBase": 0,
+                        "sleepHrvIntervalList": [],
+                    },
+                ]
+            },
+        },
+    )
+
+    _, records = await fetch_sleep(auth, "20260410", "20260411")
+    assert records[0].hrv_avg == 58
+    assert records[1].hrv_avg is None  # empty HRV row not merged
+
+
+async def test_fetch_sleep_ignores_hrv_failure(httpx_mock: HTTPXMock) -> None:
+    from coros_cli.endpoints import WEB_ANALYSE_DAY_DETAIL, WEB_BASE_URLS
+
+    auth = _auth().model_copy(update={"user_id": "u1", "web_access_token": "web"})
+    httpx_mock.add_response(
+        url=f"{MOBILE_BASE_URLS['eu']}{MOBILE_SLEEP_DAILY}?accessToken=tok",
+        json=_sleep_response([_day("20260410")]),
+    )
+    httpx_mock.add_response(
+        url=f"{WEB_BASE_URLS['eu']}{WEB_ANALYSE_DAY_DETAIL}?startDay=20260410&endDay=20260410",
+        json={"result": "0101", "message": "token invalid"},
+    )
+    _, records = await fetch_sleep(auth, "20260410", "20260410")
+    assert len(records) == 1
+    assert records[0].hrv_avg is None

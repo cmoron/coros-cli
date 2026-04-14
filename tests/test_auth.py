@@ -38,6 +38,7 @@ async def test_login_skips_mobile_by_default(httpx_mock: HTTPXMock) -> None:
 
     assert auth.region == "eu"
     assert auth.web_access_token == "web-tok"
+    assert auth.user_id == "u1"
     assert auth.mobile_access_token is None
     assert auth.mobile_login_payload is None
     assert auth.pwd_hash == "5ebe2294ecd0e0f08eab7690d2a6ee69"  # md5("secret")

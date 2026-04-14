@@ -25,6 +25,7 @@ RESULT_WRONG_REGION = "1019"
 # Web endpoints
 WEB_LOGIN = "/account/login"
 WEB_ACCOUNT_QUERY = "/account/query"
+WEB_ANALYSE_DAY_DETAIL = "/analyse/dayDetail/query"
 
 # Mobile endpoints
 MOBILE_LOGIN = "/coros/user/login"

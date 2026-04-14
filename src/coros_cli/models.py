@@ -11,6 +11,7 @@ class StoredAuth(BaseModel):
     email: str
     pwd_hash: str
     region: Region = "eu"
+    user_id: str | None = None
     web_access_token: str | None = None
     mobile_access_token: str | None = None
     mobile_login_payload: dict | None = None
@@ -32,3 +33,4 @@ class SleepRecord(BaseModel):
     avg_hr: int | None = None
     min_hr: int | None = None
     max_hr: int | None = None
+    hrv_avg: int | None = Field(None, description="Overnight HRV rmssd (ms)")

@@ -36,7 +36,9 @@ def _check_ok(body: dict, context: str) -> None:
         raise CorosAuthError(f"{context}: [{code}] {body.get('message', body)}")
 
 
-async def _web_login(client: httpx.AsyncClient, region: Region, email: str, pwd_hash: str) -> str:
+async def _web_login(
+    client: httpx.AsyncClient, region: Region, email: str, pwd_hash: str
+) -> tuple[str, str | None]:
     resp = await client.post(
         WEB_BASE_URLS[region] + WEB_LOGIN,
         json={"account": email, "accountType": 2, "pwd": pwd_hash},
@@ -45,10 +47,13 @@ async def _web_login(client: httpx.AsyncClient, region: Region, email: str, pwd_
     resp.raise_for_status()
     body = resp.json()
     _check_ok(body, "web login")
-    token = body.get("data", {}).get("accessToken")
+    data = body.get("data", {})
+    token = data.get("accessToken")
     if not token:
         raise CorosAuthError("web login: no accessToken in response")
-    return token
+    user_id = data.get("userId")
+    user_id = str(user_id) if user_id is not None else None
+    return token, user_id
 
 
 async def _detect_region(client: httpx.AsyncClient, web_token: str) -> Region:
@@ -135,11 +140,11 @@ async def login(
     """
     pwd_hash = md5_hex(password)
     async with httpx.AsyncClient(timeout=30) as client:
-        web_token = await _web_login(client, region, email, pwd_hash)
+        web_token, user_id = await _web_login(client, region, email, pwd_hash)
         detected = await _detect_region(client, web_token)
         if detected != region:
             region = detected
-            web_token = await _web_login(client, region, email, pwd_hash)
+            web_token, user_id = await _web_login(client, region, email, pwd_hash)
 
         mobile_token: str | None = None
         mobile_payload: dict[str, Any] | None = None
@@ -152,11 +157,27 @@ async def login(
         email=email,
         pwd_hash=pwd_hash,
         region=region,
+        user_id=user_id,
         web_access_token=web_token,
         mobile_access_token=mobile_token,
         mobile_login_payload=mobile_payload,
         timestamp_ms=int(time.time() * 1000),
     )
+
+
+async def ensure_user_id(auth: StoredAuth) -> StoredAuth:
+    """Capture userId by replaying web login with the stored pwd_hash.
+
+    Used to self-heal auth files created before user_id was persisted. Web
+    login does not affect the Coros mobile app session.
+    """
+    if auth.user_id:
+        return auth
+    async with httpx.AsyncClient(timeout=30) as client:
+        _token, user_id = await _web_login(client, auth.region, auth.email, auth.pwd_hash)
+    if not user_id:
+        return auth
+    return auth.model_copy(update={"user_id": user_id})
 
 
 async def ensure_mobile_token(auth: StoredAuth) -> StoredAuth:

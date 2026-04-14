@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 
+from coros_cli.api.web import CorosWebApiError, fetch_hrv_by_day
 from coros_cli.auth import CorosAuthError, ensure_mobile_token, refresh_mobile_token
 from coros_cli.endpoints import (
     MOBILE_BASE_URLS,
@@ -54,16 +57,9 @@ async def _post_sleep(client: httpx.AsyncClient, auth: StoredAuth, payload: dict
     return resp.json()
 
 
-async def fetch_sleep(
+async def _fetch_sleep_records(
     auth: StoredAuth, start_day: str, end_day: str
 ) -> tuple[StoredAuth, list[SleepRecord]]:
-    """Fetch sleep records for a YYYYMMDD date range.
-
-    If no mobile token is present, performs mobile login lazily (which will
-    disconnect the user from the Coros phone app). On token expiry, transparently
-    refreshes and retries once. Returns the possibly-refreshed auth alongside
-    the records so the caller can persist it.
-    """
     auth = await ensure_mobile_token(auth)
 
     payload = {
@@ -88,6 +84,49 @@ async def fetch_sleep(
     items = body.get("data", {}).get("statisticData", {}).get("dayDataList", []) or []
     records = [_parse_record(item) for item in items]
     records.sort(key=lambda r: r.date)
+    return auth, records
+
+
+async def fetch_sleep(
+    auth: StoredAuth, start_day: str, end_day: str
+) -> tuple[StoredAuth, list[SleepRecord]]:
+    """Fetch sleep records + HRV for a YYYYMMDD date range.
+
+    Sleep stages come from the mobile API (triggers lazy mobile login, which
+    disconnects the Coros phone app). HRV comes from the web API in parallel
+    and has no mobile-session impact. HRV rows missing userId just return
+    without HRV — we do not fail the whole command.
+    """
+    import sys
+
+    sleep_task = asyncio.create_task(_fetch_sleep_records(auth, start_day, end_day))
+    hrv_task: asyncio.Task[dict[str, int]] | None = None
+    if auth.user_id:
+        hrv_task = asyncio.create_task(fetch_hrv_by_day(auth, start_day, end_day))
+    else:
+        print("[hrv] skipped: no user_id on stored auth — re-run `coros login`", file=sys.stderr)
+
+    auth, records = await sleep_task
+
+    hrv_map: dict[str, int] = {}
+    if hrv_task is not None:
+        try:
+            hrv_map = await hrv_task
+        except CorosWebApiError as e:
+            print(f"[hrv] web fetch failed: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"[hrv] unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
+        else:
+            if not hrv_map:
+                print(
+                    f"[hrv] API returned no HRV for {start_day}..{end_day} "
+                    "(dayList empty or all avgSleepHrv=0)",
+                    file=sys.stderr,
+                )
+
+    if hrv_map:
+        records = [r.model_copy(update={"hrv_avg": hrv_map.get(r.date)}) for r in records]
+
     return auth, records
 
 
