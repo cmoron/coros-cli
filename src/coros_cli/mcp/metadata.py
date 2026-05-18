@@ -45,16 +45,22 @@ def _from_issuer(region: Region, issuer: str) -> McpServerMetadata:
     )
 
 
-# Known MCP issuers per region. Only the EU server is published so far; the
-# other regions fall back to it until COROS announces their issuers.
+# Known MCP issuers per region. COROS documents NA/else, Europe and China MCP
+# hosts; there is no public dedicated Asia endpoint, so `asia` falls back to
+# the NA/else (`us`) host below.
 MCP_ISSUERS: dict[Region, str] = {
+    "us": "https://mcpus.coros.com",
     "eu": "https://mcpeu.coros.com",
+    "cn": "https://mcpcn.coros.com",
 }
 
-_DEFAULT_REGION: Region = "eu"
+# Region used when no dedicated issuer exists (currently only `asia`). COROS
+# only documents NA/else, Europe and China hosts, so route Asia to the NA/else
+# (`us`) host rather than EU.
+_FALLBACK_REGION: Region = "us"
 
 
 def metadata_for_region(region: Region) -> McpServerMetadata:
-    """Resolve MCP server metadata for a region, falling back to EU."""
-    issuer = MCP_ISSUERS.get(region) or MCP_ISSUERS[_DEFAULT_REGION]
+    """Resolve MCP server metadata for a region, falling back to the NA/else host."""
+    issuer = MCP_ISSUERS.get(region) or MCP_ISSUERS[_FALLBACK_REGION]
     return _from_issuer(region, issuer)
