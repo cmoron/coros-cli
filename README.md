@@ -24,6 +24,7 @@ uv run coros sleep --offline --json     # read cache from then on, no network
 ### `coros login`
 
 Interactive email + password prompt. Stores:
+
 - Web access token + `userId` (needed for HRV fetch).
 - `pwd_hash` (MD5 of password — never the plaintext).
 - Region, auto-detected (`eu`/`us`/`asia`/`cn`).
@@ -53,6 +54,7 @@ coros sleep --offline                          # cache-only; exit 2 if stale
 - TTL for automatic refresh: **7 days**. Requests within that window read straight from cache.
 
 A refresh is triggered when any of these is true:
+
 - Cache file missing.
 - `synced_at_ms` older than 7 days.
 - Any day in the requested range is not cached.
@@ -90,11 +92,36 @@ All numeric fields may be `null`. `hrv_avg` is overnight HRV as rmssd in millise
 
 #### Exit codes
 
-| Code | Meaning |
-|------|---------|
-| 0    | Success |
-| 1    | Not logged in, API error, user aborted refresh |
+| Code | Meaning                                                        |
+| ---- | -------------------------------------------------------------- |
+| 0    | Success                                                        |
+| 1    | Not logged in, API error, user aborted refresh                 |
 | 2    | `--offline` set and cache insufficient for the requested range |
+
+## MCP (experimental)
+
+Experimental commands for talking to a COROS MCP server over OAuth 2.0. Independent of `coros login` — no phone session is touched.
+
+```sh
+coros mcp auth                          # OAuth flow, store credentials
+coros mcp status                        # show token state / expiry
+coros mcp tools --json                  # list server tools as JSON
+coros mcp call TOOL --args '{}'         # invoke a tool with JSON args
+coros mcp revoke                        # revoke tokens and delete credentials
+```
+
+### `coros mcp auth`
+
+Uses the OAuth 2.0 **authorization-code grant with PKCE**. `coros mcp auth`:
+
+1. Dynamically registers a public client and prints an authorization URL.
+2. You open that URL, sign in to COROS, and approve access — no password is handled by coros-cli.
+3. After approval the browser is redirected to a loopback URL (`http://localhost:8765/callback?code=…`). **coros-cli runs no local server, so that page will fail to load (“connection refused”) — this is expected.**
+4. Copy the full URL from the browser address bar and paste it back into the prompt (pasting just the `code` value also works). The `state` parameter is verified for CSRF protection when a full URL is pasted.
+
+Credentials live in `~/.config/coros-cli/mcp-oauth.json` (mode `0600`), separate from the mobile-login auth in `config.json`.
+
+`sleep` refresh has **not** been migrated to MCP — it still uses the mobile/web APIs. Migration waits until the real COROS tool schemas are known.
 
 ## Recommended agent workflow
 
@@ -107,15 +134,17 @@ coros sleep --offline --json --from 2026-04-08 --to 2026-04-14
 ```
 
 If `--offline` exits with code `2`, the agent should either:
+
 1. Fall back to the partial cache by re-running without `--offline --from/--to` to see what's actually stored, or
 2. Surface the issue to the human so they trigger the weekly sync.
 
 ## Files on disk
 
-| Path | Purpose |
-|------|---------|
-| `~/.config/coros-cli/config.json` | Stored auth (email, pwd_hash, tokens, userId, region) |
-| `~/.config/coros-cli/data/sleep.json` | Sleep records cache |
+| Path                                  | Purpose                                               |
+| ------------------------------------- | ----------------------------------------------------- |
+| `~/.config/coros-cli/config.json`     | Stored auth (email, pwd_hash, tokens, userId, region) |
+| `~/.config/coros-cli/data/sleep.json` | Sleep records cache                                   |
+| `~/.config/coros-cli/mcp-oauth.json`  | MCP OAuth credentials (experimental)                  |
 
 Both are `0600`. The plaintext password is never stored — only its MD5 hash, which is the credential shape Coros's API itself expects.
 

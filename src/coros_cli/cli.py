@@ -14,6 +14,7 @@ from coros_cli.auth import CorosAuthError, ensure_user_id
 from coros_cli.auth import login as auth_login
 from coros_cli.cache import load_sleep_cache, merge_records, save_sleep_cache
 from coros_cli.config import load_auth, save_auth
+from coros_cli.mcp.commands import mcp_app
 from coros_cli.models import Region, SleepRecord
 
 _APP_HELP = """\
@@ -22,6 +23,7 @@ Coros sleep CLI — extract sleep metrics from your Coros Training Hub account.
 Commands:
   login   Authenticate once, stores credentials under ~/.config/coros-cli/.
   sleep   Display sleep records from the local cache, refreshing on demand.
+  mcp     Talk to the official COROS MCP server (experimental, read-only).
 
 Data returned per night (all optional, may be null):
   - total / deep / light / rem / awake / nap (all in minutes)
@@ -35,6 +37,7 @@ per week is enough for most use cases. See `coros sleep --help` for details.
 """
 
 app = typer.Typer(help=_APP_HELP)
+app.add_typer(mcp_app, name="mcp")
 console = Console()
 err_console = Console(stderr=True)
 
