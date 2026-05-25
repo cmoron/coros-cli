@@ -1,6 +1,6 @@
 [project]
 name = "coros-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "CLI to query the official COROS MCP server (sleep, HR, HRV, activities…)"
 readme = "README.md"
 authors = [
