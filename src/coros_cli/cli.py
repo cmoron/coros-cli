@@ -1,62 +1,37 @@
 from __future__ import annotations
 
-import asyncio
-import sys
 from datetime import date, datetime, timedelta
 from typing import Annotated
 
 import typer
-from rich.console import Console
-from rich.table import Table
 
-from coros_cli.api.mobile import CorosApiError, fetch_sleep
-from coros_cli.auth import CorosAuthError, ensure_user_id
-from coros_cli.auth import login as auth_login
-from coros_cli.cache import load_sleep_cache, merge_records, save_sleep_cache
-from coros_cli.config import load_auth, save_auth
+from coros_cli.mcp.commands import auth as mcp_auth
 from coros_cli.mcp.commands import mcp_app
-from coros_cli.models import Region, SleepRecord
+from coros_cli.mcp.commands import revoke_cmd as mcp_revoke
+from coros_cli.mcp.runner import default_timezone, run
 
 _APP_HELP = """\
-Coros sleep CLI — extract sleep metrics from your Coros Training Hub account.
+COROS CLI — talk to the official COROS MCP backend.
 
-Commands:
-  login   Authenticate once, stores credentials under ~/.config/coros-cli/.
-  sleep   Display sleep records from the local cache, refreshing on demand.
-  mcp     Talk to the official COROS MCP server (experimental, read-only).
+Run `coros auth` once (OAuth in your browser, no password handled by the CLI),
+then any of the data commands below. Credentials live in
+~/.config/coros-cli/mcp-oauth.json (mode 0600).
 
-Data returned per night (all optional, may be null):
-  - total / deep / light / rem / awake / nap (all in minutes)
-  - avg_hr / min_hr / max_hr (overnight heart rate, bpm)
-  - hrv_avg (overnight HRV, rmssd in ms — from the web /analyse API)
-
-Key constraint: pulling fresh sleep data requires a Coros mobile-API login,
-which disconnects the Coros app from your phone. The CLI caches results
-locally (~/.config/coros-cli/data/sleep.json) to minimize this — one refresh
-per week is enough for most use cases. See `coros sleep --help` for details.
+Most commands accept `--days N`, `--from YYYY-MM-DD`, `--to YYYY-MM-DD`,
+`--tz <IANA>` and `--json`. Run `coros <command> --help` for details.
 """
 
-app = typer.Typer(help=_APP_HELP)
+app = typer.Typer(help=_APP_HELP, no_args_is_help=True)
 app.add_typer(mcp_app, name="mcp")
-console = Console()
-err_console = Console(stderr=True)
 
 
-def _format_duration(minutes: int | None) -> str:
-    if minutes is None:
-        return "-"
-    h, m = divmod(minutes, 60)
-    return f"{h}h{m:02d}"
-
-
-def _format_date(yyyymmdd: str) -> str:
-    if len(yyyymmdd) != 8:
-        return yyyymmdd
-    return f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:]}"
+# ---------------------------------------------------------------------------
+# Date helpers
+# ---------------------------------------------------------------------------
 
 
 def _parse_date(value: str) -> str:
-    """Parse YYYY-MM-DD → YYYYMMDD, or pass through YYYYMMDD."""
+    """Parse YYYY-MM-DD or YYYYMMDD into the YYYYMMDD form COROS expects."""
     for fmt in ("%Y-%m-%d", "%Y%m%d"):
         try:
             return datetime.strptime(value, fmt).strftime("%Y%m%d")
@@ -65,198 +40,345 @@ def _parse_date(value: str) -> str:
     raise typer.BadParameter(f"Invalid date: {value!r} (expected YYYY-MM-DD)")
 
 
-def _render_sleep_table(records: list[SleepRecord]) -> Table:
-    table = Table(title=f"Sleep ({len(records)} nights)")
-    table.add_column("Date")
-    table.add_column("Total", justify="right")
-    table.add_column("Deep", justify="right")
-    table.add_column("Light", justify="right")
-    table.add_column("REM", justify="right")
-    table.add_column("Awake", justify="right")
-    table.add_column("Avg HR", justify="right")
-    table.add_column("HRV", justify="right")
-    for r in records:
-        table.add_row(
-            _format_date(r.date),
-            _format_duration(r.total_minutes),
-            _format_duration(r.phases.deep_minutes),
-            _format_duration(r.phases.light_minutes),
-            _format_duration(r.phases.rem_minutes),
-            _format_duration(r.phases.awake_minutes),
-            str(r.avg_hr) if r.avg_hr is not None else "-",
-            str(r.hrv_avg) if r.hrv_avg is not None else "-",
-        )
-    return table
+def _date_range(from_: str | None, to: str | None, days: int) -> tuple[str, str]:
+    """Resolve a (startDate, endDate) pair in YYYYMMDD form from CLI flags."""
+    end = _parse_date(to) if to else date.today().strftime("%Y%m%d")
+    if from_:
+        start = _parse_date(from_)
+    else:
+        start_dt = datetime.strptime(end, "%Y%m%d").date() - timedelta(days=days - 1)
+        start = start_dt.strftime("%Y%m%d")
+    return start, end
+
+
+def _tz(tz: str | None) -> str:
+    return tz or default_timezone()
+
+
+# ---------------------------------------------------------------------------
+# Auth aliases — `coros auth` / `coros logout` shortcut to the MCP commands
+# ---------------------------------------------------------------------------
+
+
+app.command("auth")(mcp_auth)
+app.command("logout")(mcp_revoke)
+
+
+# ---------------------------------------------------------------------------
+# Profile & devices
+# ---------------------------------------------------------------------------
 
 
 @app.command()
-def login(
-    email: Annotated[str, typer.Option(prompt=True)],
-    password: Annotated[str, typer.Option(prompt=True, hide_input=True)],
-    region: Annotated[Region, typer.Option(help="eu/us/asia/cn — auto-detected")] = "eu",
-    with_mobile: Annotated[
-        bool,
-        typer.Option(
-            "--with-mobile",
-            help="Also log in to the mobile API now (will disconnect the Coros app on your phone).",
-        ),
-    ] = False,
+def profile(
+    json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Log in to Coros. Captures the web token + userId required for HRV.
-
-    Credentials (pwd_hash, not plaintext) are stored in
-    ~/.config/coros-cli/config.json (mode 0600). Run this once; the CLI
-    self-heals missing fields on later sleep refreshes using the stored hash.
-
-    --with-mobile forces the mobile-API login immediately, which disconnects
-    the Coros app on your phone. Omit it to defer the kick until the first
-    `coros sleep` refresh.
-    """
-    try:
-        auth = asyncio.run(auth_login(email, password, region=region, with_mobile=with_mobile))
-    except CorosAuthError as e:
-        err_console.print(f"[red]Login failed:[/red] {e}")
-        raise typer.Exit(1) from e
-    save_auth(auth)
-    mobile_note = "" if auth.mobile_access_token else " (mobile login deferred)"
-    console.print(f"[green]Logged in[/green] — region: {auth.region}{mobile_note}")
+    """Show your COROS profile (height, weight, birthday, gender)."""
+    run("queryUserInfo", {}, json_output=json_output)
 
 
-_CACHE_TTL_DAYS = 7.0
+@app.command()
+def devices(
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List the COROS devices bound to your account."""
+    run("queryDevices", {}, json_output=json_output)
 
 
-def _confirm_kick(yes: bool) -> bool:
-    if yes:
-        return True
-    err_console.print(
-        "[yellow]Refreshing sleep data requires logging into the Coros mobile API,\n"
-        "which will disconnect you from the Coros app on your phone.[/yellow]"
-    )
-    return typer.confirm("Proceed with refresh?", default=False)
+# ---------------------------------------------------------------------------
+# Daily health metrics
+# ---------------------------------------------------------------------------
+
+
+_DAYS = Annotated[int, typer.Option(help="Number of recent days to query.")]
+_FROM = Annotated[str | None, typer.Option("--from", help="Start date YYYY-MM-DD or YYYYMMDD.")]
+_TO = Annotated[str | None, typer.Option("--to", help="End date YYYY-MM-DD or YYYYMMDD.")]
+_TZ = Annotated[str | None, typer.Option("--tz", help="IANA timezone (defaults to system).")]
+_JSON = Annotated[bool, typer.Option("--json", help="Emit the raw tool result as JSON.")]
 
 
 @app.command()
 def sleep(
-    from_: Annotated[
-        str | None,
-        typer.Option("--from", help="Inclusive start date (YYYY-MM-DD or YYYYMMDD)."),
-    ] = None,
-    to: Annotated[
-        str | None,
-        typer.Option(
-            "--to", help="Inclusive end date (YYYY-MM-DD or YYYYMMDD). Defaults to today."
-        ),
-    ] = None,
-    days: Annotated[
-        int,
-        typer.Option(help="Last N days if --from/--to are omitted. Default 7."),
-    ] = 7,
-    json_output: Annotated[
-        bool,
-        typer.Option("--json", help="Emit records as JSON on stdout. See command help for schema."),
-    ] = False,
-    force: Annotated[
-        bool,
-        typer.Option("--force", help="Refresh from the API even if the cache is fresh."),
-    ] = False,
-    offline: Annotated[
-        bool,
-        typer.Option(
-            "--offline",
-            help="Never hit the network; exit 2 if a refresh would be needed.",
-        ),
-    ] = False,
-    yes: Annotated[
-        bool,
-        typer.Option(
-            "--yes",
-            "-y",
-            help="Skip the y/N prompt before refreshing (the refresh kicks the phone app).",
-        ),
-    ] = False,
+    days: _DAYS = 7,
+    from_: _FROM = None,
+    to: _TO = None,
+    tz: _TZ = None,
+    json_output: _JSON = False,
 ) -> None:
-    """Show sleep records. Reads from local cache; refreshes on demand.
+    """Sleep score, duration, deep/light/REM ratios, awake count, naps."""
+    start, end = _date_range(from_, to, days)
+    run(
+        "querySleepData",
+        {"startDate": start, "endDate": end, "days": days, "timezone": _tz(tz)},
+        json_output=json_output,
+    )
 
-    Default range is the last 7 days; override with --from/--to (YYYY-MM-DD)
-    or --days N. Output is a Rich table unless --json is set.
 
-    JSON output is a list of records with this schema:
-      {
-        "date": "YYYYMMDD",
-        "total_minutes": int|null,
-        "phases": {"deep_minutes": int|null, "light_minutes": int|null,
-                    "rem_minutes": int|null, "awake_minutes": int|null,
-                    "nap_minutes": int|null},
-        "avg_hr": int|null, "min_hr": int|null, "max_hr": int|null,
-        "hrv_avg": int|null   // rmssd ms, from web API
-      }
+@app.command()
+def health(
+    days: _DAYS = 7,
+    tz: _TZ = None,
+    json_output: _JSON = False,
+) -> None:
+    """Daily wellness summary: steps, calories, HR, stress, sleep."""
+    run(
+        "queryDailyHealthData",
+        {"days": days, "timezone": _tz(tz)},
+        json_output=json_output,
+    )
 
-    Cache behavior:
-      - File: ~/.config/coros-cli/data/sleep.json
-      - A refresh is triggered when: the cache is missing, older than 7 days,
-        any day in the requested range is not cached, or --force is set.
-      - A refresh logs into the Coros mobile API, which disconnects the
-        Coros app on your phone. The CLI asks for confirmation unless --yes.
-      - --offline forbids network access; exits 2 if a refresh would be
-        needed. Useful for recurrent reads that must never kick the phone.
 
-    Recommended agent workflow:
-      Weekly sync:  coros sleep --days 14 --yes
-      Daily reads:  coros sleep --offline --json   (fails loudly if stale)
+@app.command()
+def hr(
+    days: _DAYS = 7,
+    tz: _TZ = None,
+    json_output: _JSON = False,
+) -> None:
+    """Daily average heart rate."""
+    run(
+        "queryAvgHeartRate",
+        {"days": days, "timezone": _tz(tz)},
+        json_output=json_output,
+    )
 
-    Exit codes: 0 ok, 1 API error / not logged in, 2 --offline but refresh
-    needed.
-    """
-    auth = load_auth()
-    if auth is None:
-        err_console.print("[red]Not logged in.[/red] Run: coros login")
-        raise typer.Exit(1)
 
-    today = date.today()
-    end = _parse_date(to) if to else today.strftime("%Y%m%d")
-    start = _parse_date(from_) if from_ else (today - timedelta(days=days - 1)).strftime("%Y%m%d")
+@app.command()
+def resting(
+    days: _DAYS = 7,
+    tz: _TZ = None,
+    json_output: _JSON = False,
+) -> None:
+    """Daily resting heart rate."""
+    run(
+        "queryRestingHeartRate",
+        {"days": days, "timezone": _tz(tz)},
+        json_output=json_output,
+    )
 
-    cache = load_sleep_cache()
-    needs_refresh = force or cache.is_stale(_CACHE_TTL_DAYS) or not cache.covers(start, end)
 
-    if needs_refresh and offline:
-        err_console.print(
-            f"[red]Cache insufficient[/red] (stale={cache.is_stale(_CACHE_TTL_DAYS)}, "
-            f"covers={cache.covers(start, end)}) and --offline set. Aborting."
-        )
-        raise typer.Exit(2)
+@app.command()
+def hrv(
+    days: _DAYS = 7,
+    tz: _TZ = None,
+    json_output: _JSON = False,
+) -> None:
+    """Daily HRV assessment (average, normal range, evaluation)."""
+    run(
+        "queryHrvAssessment",
+        {"days": days, "timezone": _tz(tz)},
+        json_output=json_output,
+    )
 
-    if needs_refresh:
-        if not _confirm_kick(yes):
-            err_console.print("[yellow]Refresh cancelled; showing what's in cache.[/yellow]")
-        else:
-            try:
-                if not auth.user_id:
-                    auth = asyncio.run(ensure_user_id(auth))
-                    save_auth(auth)
-                new_auth, fetched = asyncio.run(fetch_sleep(auth, start, end))
-            except (CorosApiError, CorosAuthError) as e:
-                err_console.print(f"[red]Error:[/red] {e}")
-                raise typer.Exit(1) from e
-            if new_auth != auth:
-                save_auth(new_auth)
-            cache = merge_records(cache, fetched)
-            save_sleep_cache(cache)
 
-    records = cache.in_range(start, end)
+@app.command()
+def stress(
+    days: _DAYS = 7,
+    tz: _TZ = None,
+    json_output: _JSON = False,
+) -> None:
+    """Daily average stress level."""
+    run(
+        "queryStressLevel",
+        {"days": days, "timezone": _tz(tz)},
+        json_output=json_output,
+    )
 
-    if json_output:
-        import json
 
-        sys.stdout.write(json.dumps([r.model_dump() for r in records], indent=2, default=str))
-        sys.stdout.write("\n")
-    else:
-        if not records:
-            err_console.print("[yellow]No records in cache for the requested range.[/yellow]")
-        console.print(_render_sleep_table(records))
-        age = cache.age_days()
-        if age != float("inf"):
-            console.print(f"[dim]cache: {age:.1f}d old, {len(cache.records)} nights stored[/dim]")
+@app.command()
+def recovery(
+    json_output: _JSON = False,
+) -> None:
+    """Current recovery status (percentage, level, time-to-full)."""
+    run("queryRecoveryStatus", {}, json_output=json_output)
+
+
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def load(
+    days: _DAYS = 7,
+    json_output: _JSON = False,
+) -> None:
+    """Training load assessment (short/long-term load, ratio, comments)."""
+    run(
+        "queryTrainingLoadAssessment",
+        {"days": days},
+        json_output=json_output,
+    )
+
+
+@app.command()
+def schedule(
+    from_: _FROM = None,
+    to: _TO = None,
+    days: _DAYS = 7,
+    tz: _TZ = None,
+    json_output: _JSON = False,
+) -> None:
+    """Training schedule for the requested date range (defaults to this week)."""
+    start, end = _date_range(from_, to, days)
+    run(
+        "queryTrainingSchedule",
+        {"startDate": start, "endDate": end, "timezone": _tz(tz)},
+        json_output=json_output,
+    )
+
+
+@app.command()
+def fitness(
+    json_output: _JSON = False,
+) -> None:
+    """Fitness overview: VO2max, running level, threshold pace, race predictions."""
+    run("queryFitnessAssessmentOverview", {}, json_output=json_output)
+
+
+# ---------------------------------------------------------------------------
+# Activities
+# ---------------------------------------------------------------------------
+
+
+_SPORT_GROUPS: dict[str, list[int]] = {
+    "run": [100, 101, 102, 103, 104, 105, 106],
+    "bike": [200, 201, 202, 203, 204, 205, 299],
+    "swim": [300, 301],
+    "gym": [400, 401, 402],
+    "ski": [500, 501, 502, 503],
+    "walk": [900],
+    "row": [700, 701, 702, 704, 705],
+    "climb": [800, 801, 802],
+    "tri": [10000],
+    "all": [65535],
+}
+
+
+def _resolve_sport_codes(sport: str | None) -> list[int]:
+    if not sport:
+        return [65535]
+    if sport in _SPORT_GROUPS:
+        return _SPORT_GROUPS[sport]
+    codes: list[int] = []
+    for token in sport.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if token in _SPORT_GROUPS:
+            codes.extend(_SPORT_GROUPS[token])
+            continue
+        try:
+            codes.append(int(token))
+        except ValueError as e:
+            raise typer.BadParameter(
+                f"--sport: unknown sport {token!r}. "
+                f"Known groups: {', '.join(sorted(_SPORT_GROUPS))}, or pass a numeric code."
+            ) from e
+    return codes or [65535]
+
+
+@app.command()
+def activities(
+    days: _DAYS = 7,
+    from_: _FROM = None,
+    to: _TO = None,
+    sport: Annotated[
+        str | None,
+        typer.Option(
+            "--sport",
+            help=(
+                "Sport filter. Group name (run, bike, swim, gym, ski, walk, row, "
+                "climb, tri, all), numeric code, or comma-separated list."
+            ),
+        ),
+    ] = None,
+    min_km: Annotated[
+        float | None, typer.Option("--min-km", help="Minimum distance in km.")
+    ] = None,
+    max_km: Annotated[
+        float | None, typer.Option("--max-km", help="Maximum distance in km.")
+    ] = None,
+    min_min: Annotated[
+        int | None, typer.Option("--min-min", help="Minimum duration in minutes.")
+    ] = None,
+    max_min: Annotated[
+        int | None, typer.Option("--max-min", help="Maximum duration in minutes.")
+    ] = None,
+    max_pace: Annotated[
+        str | None, typer.Option("--max-pace", help="Maximum average pace e.g. 5:30.")
+    ] = None,
+    location: Annotated[
+        str | None, typer.Option("--location", help="Location keyword (city, park…).")
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Max records to return.")] = 20,
+    tz: _TZ = None,
+    json_output: _JSON = False,
+) -> None:
+    """List workouts with optional date / sport / distance / duration filters."""
+    start, end = _date_range(from_, to, days)
+    args: dict[str, object] = {
+        "startDate": start,
+        "endDate": end,
+        "sportTypeCodes": _resolve_sport_codes(sport),
+        "minDistanceKm": min_km,
+        "maxDistanceKm": max_km,
+        "minDurationMinutes": min_min,
+        "maxDurationMinutes": max_min,
+        "maxAveragePace": max_pace,
+        "locationKeyword": location,
+        "limit": limit,
+        "timezone": _tz(tz),
+    }
+    run("querySportRecords", args, json_output=json_output)
+
+
+@app.command()
+def activity(
+    label_id: Annotated[str, typer.Argument(help="The activity labelId.")],
+    sport_type: Annotated[
+        int,
+        typer.Option(
+            "--sport-type",
+            "-s",
+            help="COROS sport type code (e.g. 100=outdoor run, 200=outdoor bike).",
+        ),
+    ],
+    json_output: _JSON = False,
+) -> None:
+    """Detailed metrics for one activity (HR, pace, elevation, cadence…)."""
+    run(
+        "getActivityDetail",
+        {"labelId": label_id, "sportType": sport_type},
+        json_output=json_output,
+    )
+
+
+@app.command()
+def analyze(
+    label_id: Annotated[str, typer.Argument(help="The activity labelId.")],
+    sport_type: Annotated[
+        int,
+        typer.Option(
+            "--sport-type",
+            "-s",
+            help="COROS sport type code (e.g. 100=outdoor run, 200=outdoor bike).",
+        ),
+    ],
+    focus: Annotated[
+        str | None,
+        typer.Option(
+            "--focus",
+            help="Optional analysis focus, e.g. 'pace stability', 'heart rate'.",
+        ),
+    ] = None,
+    json_output: _JSON = False,
+) -> None:
+    """Coach-style analysis of an activity in plain language."""
+    run(
+        "analyzeActivityDetail",
+        {"labelId": label_id, "sportType": sport_type, "focus": focus or ""},
+        json_output=json_output,
+    )
 
 
 if __name__ == "__main__":

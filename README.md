@@ -1,173 +1,113 @@
 # coros-cli
 
-Unofficial Python CLI to extract sleep metrics from your [Coros Training Hub](https://t.coros.com) account.
+Unofficial Python CLI on top of the official [COROS MCP server](https://mcpeu.coros.com).
 
-Not affiliated with Coros. Uses your own credentials against Coros's private APIs (reverse-engineered from the mobile app).
+Read-only access to sleep, HRV, heart rate, stress, recovery, training load, and
+activities — using OAuth 2.0. No password is handled by the CLI; authentication
+happens in your browser. Not affiliated with COROS.
 
-## Install
+Primarily designed for **AI agents**: every command produces structured text
+(or `--json` raw output) suitable for piping into an LLM. See [`SKILL.md`](./SKILL.md)
+for a ready-to-use agent skill bundle.
+
+## Setup
 
 ```sh
 uv sync
 uv run coros --help
 ```
 
-## Quickstart
+## Quick start
 
 ```sh
-uv run coros login                      # once, interactive prompt
-uv run coros sleep --days 14 --yes      # weekly refresh (kicks the phone app once)
-uv run coros sleep --offline --json     # read cache from then on, no network
+uv run coros auth                 # OAuth in your browser, runs once
+uv run coros profile              # height, weight, birthday, gender
+uv run coros sleep --days 7       # last 7 nights
+uv run coros activities --sport run --days 14
+uv run coros analyze <labelId> -s 100 --focus "pace stability"
+```
+
+## Authentication
+
+`coros auth` runs the OAuth 2.0 authorization-code flow with PKCE against the
+COROS MCP server. It registers a public client dynamically (RFC 7591), opens
+an authorization URL in the terminal, and asks you to paste back the redirect
+URL after you approve in the browser.
+
+Credentials (access + refresh token) live in `~/.config/coros-cli/mcp-oauth.json`
+(mode `0600`). The CLI refreshes access tokens automatically when they expire.
+
+```sh
+coros auth                        # log in
+coros mcp status                  # show token state and expiry
+coros logout                      # revoke + delete local credentials
 ```
 
 ## Commands
 
-### `coros login`
+All data commands share these flags where they make sense:
 
-Interactive email + password prompt. Stores:
+- `--days N` — number of recent days to query (default 7)
+- `--from YYYY-MM-DD` / `--to YYYY-MM-DD` — explicit date range
+- `--tz IANA` — timezone for date bucketing (defaults to system timezone)
+- `--json` — emit the raw MCP tool result as JSON on stdout
 
-- Web access token + `userId` (needed for HRV fetch).
-- `pwd_hash` (MD5 of password — never the plaintext).
-- Region, auto-detected (`eu`/`us`/`asia`/`cn`).
+| Command | What it returns |
+|---|---|
+| `coros profile` | Height, weight, birthday, age, gender |
+| `coros devices` | Bound COROS devices and firmware info |
+| `coros sleep` | Sleep score, duration, deep/light/REM ratios, awake count, naps |
+| `coros health` | Daily wellness: steps, calories, HR, stress, sleep |
+| `coros hr` | Daily average heart rate |
+| `coros resting` | Daily resting heart rate |
+| `coros hrv` | HRV average, normal range, evaluation per day |
+| `coros stress` | Daily average stress level |
+| `coros recovery` | Current recovery %, level, estimated full-recovery time |
+| `coros load` | Training load (short/long-term, ratio, daily comments) |
+| `coros schedule` | Training schedule for a date range |
+| `coros fitness` | VO2max, running level, threshold pace, race predictions |
+| `coros activities` | Workouts with filters (date, sport, distance, duration…) |
+| `coros activity <id>` | Detailed metrics for one activity |
+| `coros analyze <id>` | Coach-style analysis of one activity |
 
-File: `~/.config/coros-cli/config.json`, mode `0600`.
+### Activity filters
 
-Re-run if you change password or switch account. The CLI self-heals a missing `userId` on any later `sleep` refresh, so you don't need to re-run `login` just because the auth file predates a CLI update.
-
-Flag `--with-mobile` forces the mobile login immediately (disconnects the Coros app on your phone). Omit it to defer the kick until the first `sleep` refresh.
-
-### `coros sleep`
-
-Display sleep records. Reads from a local cache, refreshing on demand.
-
-```sh
-coros sleep                                    # last 7 days from cache
-coros sleep --from 2026-04-01 --to 2026-04-14  # explicit range
-coros sleep --days 30 --json                   # 30 days as JSON
-coros sleep --force --yes                      # force refresh, no prompt
-coros sleep --offline                          # cache-only; exit 2 if stale
-```
-
-#### Cache
-
-- File: `~/.config/coros-cli/data/sleep.json` (mode `0600`)
-- Per-day records keyed by `YYYYMMDD` + a `synced_at_ms` timestamp.
-- TTL for automatic refresh: **7 days**. Requests within that window read straight from cache.
-
-A refresh is triggered when any of these is true:
-
-- Cache file missing.
-- `synced_at_ms` older than 7 days.
-- Any day in the requested range is not cached.
-- `--force` passed.
-
-A refresh performs: mobile login → pull sleep stages → pull HRV via web API → merge into cache. The mobile login **disconnects the Coros app from your phone** (Coros enforces one active mobile session per account). The CLI prompts `[y/N]` before kicking, unless `--yes` / `-y` is passed.
-
-`--offline` forbids network access entirely. If a refresh would be required, the CLI exits with code `2`. Use this in automation that must never disrupt the phone session.
-
-#### JSON schema
-
-`coros sleep --json` emits a list:
-
-```json
-[
-  {
-    "date": "20260414",
-    "total_minutes": 430,
-    "phases": {
-      "deep_minutes": 95,
-      "light_minutes": 245,
-      "rem_minutes": 70,
-      "awake_minutes": 20,
-      "nap_minutes": null
-    },
-    "avg_hr": 52,
-    "min_hr": 46,
-    "max_hr": 68,
-    "hrv_avg": 58
-  }
-]
-```
-
-All numeric fields may be `null`. `hrv_avg` is overnight HRV as rmssd in milliseconds, sourced from the Coros web API `/analyse/dayDetail/query` endpoint.
-
-#### Exit codes
-
-| Code | Meaning                                                        |
-| ---- | -------------------------------------------------------------- |
-| 0    | Success                                                        |
-| 1    | Not logged in, API error, user aborted refresh                 |
-| 2    | `--offline` set and cache insufficient for the requested range |
-
-## MCP (experimental)
-
-Experimental commands for talking to a COROS MCP server over OAuth 2.0. Independent of `coros login` — no phone session is touched.
+`coros activities` accepts a `--sport` group name (`run`, `bike`, `swim`,
+`gym`, `ski`, `walk`, `row`, `climb`, `tri`, `all`), a numeric COROS sport
+code (e.g. `100` for outdoor run), or a comma-separated list mixing both.
 
 ```sh
-coros mcp auth                          # OAuth flow, store credentials
-coros mcp status                        # show token state / expiry
-coros mcp tools --json                  # list server tools as JSON
-coros mcp call TOOL --args '{}'         # invoke a tool with JSON args
-coros mcp revoke                        # revoke tokens and delete credentials
+coros activities --sport run --min-km 5 --max-pace 5:30
+coros activities --sport 100,bike --days 30 --limit 50
+coros activities --from 2026-04-01 --to 2026-04-30 --location Marseille
 ```
 
-### `coros mcp auth`
+`coros activity` and `coros analyze` both require the activity's `labelId` and
+its `--sport-type` (visible in `coros activities` output). `--focus` on
+`coros analyze` is a free-text hint sent to the server (e.g. `"pace stability"`,
+`"heart rate"`, `"cadence"`).
 
-Uses the OAuth 2.0 **authorization-code grant with PKCE**. `coros mcp auth`:
+## Escape hatch — raw MCP access
 
-1. Dynamically registers a public client and prints an authorization URL.
-2. You open that URL, sign in to COROS, and approve access — no password is handled by coros-cli.
-3. After approval the browser is redirected to a loopback URL (`http://localhost:8765/callback?code=…`). **coros-cli runs no local server, so that page will fail to load (“connection refused”) — this is expected.**
-4. Copy the full URL from the browser address bar and paste it back into the prompt (pasting just the `code` value also works). The `state` parameter is verified for CSRF protection when a full URL is pasted.
-
-Credentials live in `~/.config/coros-cli/mcp-oauth.json` (mode `0600`), separate from the mobile-login auth in `config.json`.
-
-`sleep` refresh has **not** been migrated to MCP — it still uses the mobile/web APIs. Migration waits until the real COROS tool schemas are known.
-
-## Recommended agent workflow
+The `coros mcp` group exposes the underlying MCP server directly. Useful when
+COROS ships a tool the CLI does not yet wrap.
 
 ```sh
-# Human or weekly scheduled task — one kick per week is acceptable.
-coros sleep --days 14 --yes
-
-# Agents reading data throughout the week — never touches the network.
-coros sleep --offline --json --from 2026-04-08 --to 2026-04-14
+coros mcp tools                       # list server tools
+coros mcp tools --json                # full JSON schemas
+coros mcp call queryUserInfo          # invoke a tool with no arguments
+coros mcp call querySleepData \
+  --args '{"days": 3, "timezone": "Europe/Paris",
+           "startDate": "20260523", "endDate": "20260525"}'
 ```
 
-If `--offline` exits with code `2`, the agent should either:
-
-1. Fall back to the partial cache by re-running without `--offline --from/--to` to see what's actually stored, or
-2. Surface the issue to the human so they trigger the weekly sync.
-
-## Files on disk
-
-| Path                                  | Purpose                                               |
-| ------------------------------------- | ----------------------------------------------------- |
-| `~/.config/coros-cli/config.json`     | Stored auth (email, pwd_hash, tokens, userId, region) |
-| `~/.config/coros-cli/data/sleep.json` | Sleep records cache                                   |
-| `~/.config/coros-cli/mcp-oauth.json`  | MCP OAuth credentials (experimental)                  |
-
-Both are `0600`. The plaintext password is never stored — only its MD5 hash, which is the credential shape Coros's API itself expects.
-
-## Why does a refresh disconnect my phone?
-
-Coros's mobile API enforces a single active session per account. Any mobile login from the CLI invalidates the token held by the Coros app on your phone, and vice versa. The web API (activities, HRV) does not have this constraint — but sleep stages are only exposed on the mobile API, so any CLI that pulls sleep must accept the tradeoff.
-
-The cache + 7-day TTL means you trade one deliberate phone reconnect per week for all your queries in between. Re-open the Coros app and log back in after each sync.
-
-## Dev
+## Development
 
 ```sh
-uv run pytest           # tests
-uv run ruff check .     # lint
-uv run ruff format .    # format
-uv run mypy src         # types
+uv run pytest                # run the test suite
+uv run ruff check src/ tests/
+uv run mypy src/ tests/
 ```
 
-## Implementation notes
-
-Two APIs are involved:
-
-- **Web** (`teameuapi.coros.com`, regional variants): login via MD5(pwd); `accesstoken` + `yfheader: {userId}` headers. Used for HRV via `/analyse/dayDetail/query`.
-- **Mobile** (`apieu.coros.com`): login with AES-128-CBC payload, XOR-derived key, IV `weloop3_2015_03#` (reverse-engineered from the Coros APK). Sleep via `POST /coros/data/statistic/daily`. Single active session per account.
-
-`scripts/probe_hrv.py` dumps the raw `/analyse/dayDetail/query` response — useful when HRV extraction needs debugging.
+Tests don't touch the network: the OAuth + MCP transport are unit-tested with
+mocked HTTP, and the CLI tests stub out `runner.call_tool`.

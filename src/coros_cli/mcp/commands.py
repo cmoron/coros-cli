@@ -2,56 +2,42 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import time
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
-from rich.console import Console
 from rich.table import Table
 
 from coros_cli.mcp.client import McpClientError
-from coros_cli.mcp.models import McpOAuthState
 from coros_cli.mcp.oauth import McpOAuthError
-from coros_cli.mcp.session import (
-    begin_authorization,
-    build_client,
-    complete_authorization,
-    ensure_fresh,
-    revoke,
+from coros_cli.mcp.runner import (
+    call_tool,
+    console,
+    emit_json,
+    err_console,
+    load_state_or_exit,
+    render_result,
 )
+from coros_cli.mcp.session import begin_authorization, complete_authorization, ensure_fresh, revoke
 from coros_cli.mcp.store import clear_mcp_state, load_mcp_state, mcp_oauth_path, save_mcp_state
 from coros_cli.models import Region
 
 _MCP_HELP = """\
-Talk to the official COROS MCP server (experimental, read-only).
+Low-level access to the COROS MCP server.
 
-This is a separate, OAuth-based backend from `coros login` / `coros sleep`.
-It does NOT disconnect the Coros app on your phone. Credentials are stored in
-~/.config/coros-cli/mcp-oauth.json (mode 0600), independent of the mobile login.
+Top-level commands like `coros sleep`, `coros activities`, etc. use the same
+MCP backend; this group exposes the raw building blocks for debugging and
+forward-compatibility when COROS ships new tools the CLI does not yet wrap.
 
 Commands:
   auth     OAuth authorization-code login against the COROS MCP server.
   status   Show stored MCP credentials and token expiry.
   tools    List the tools exposed by the MCP server.
-  call     Invoke an MCP tool by name.
+  call     Invoke an MCP tool by name with arbitrary JSON arguments.
   revoke   Revoke the refresh token and delete the local credentials.
-
-`coros sleep` still uses the legacy mobile API; the MCP backend will replace
-it once the COROS tool schema is known.
 """
 
 mcp_app = typer.Typer(help=_MCP_HELP, no_args_is_help=True)
-console = Console()
-err_console = Console(stderr=True)
-
-
-def _load_state_or_exit() -> McpOAuthState:
-    state = load_mcp_state()
-    if state is None:
-        err_console.print("[red]Not authenticated with the MCP server.[/red] Run: coros mcp auth")
-        raise typer.Exit(1)
-    return state
 
 
 @mcp_app.command("auth")
@@ -76,8 +62,10 @@ def auth(
         raise typer.Exit(1) from e
 
     console.print("\n[bold]Authorize coros-cli with COROS:[/bold]")
-    console.print("  1. Open this URL in your browser and approve access:\n")
-    console.print(f"     [cyan]{pending.authorization_url}[/cyan]\n")
+    console.print("  1. Open this URL in your browser and approve access:")
+    console.print()
+    console.print(f"     [cyan]{pending.authorization_url}[/cyan]", soft_wrap=True)
+    console.print()
     console.print(
         "  2. After approval the browser is redirected to "
         f"[dim]{pending.redirect_uri}[/dim] —\n"
@@ -101,7 +89,7 @@ def status() -> None:
     """Show the stored MCP OAuth credentials and access-token freshness."""
     state = load_mcp_state()
     if state is None:
-        console.print("[yellow]Not authenticated.[/yellow] Run: coros mcp auth")
+        console.print("[yellow]Not authenticated.[/yellow] Run: coros auth")
         raise typer.Exit(0)
 
     expired = state.access_expired()
@@ -130,11 +118,6 @@ def status() -> None:
         console.print("[dim]Token is stale; the next command will refresh it automatically.[/dim]")
 
 
-def _emit_json(payload: Any) -> None:
-    sys.stdout.write(json.dumps(payload, indent=2, default=str))
-    sys.stdout.write("\n")
-
-
 @mcp_app.command("tools")
 def tools(
     json_output: Annotated[
@@ -142,15 +125,23 @@ def tools(
     ] = False,
 ) -> None:
     """List the tools exposed by the COROS MCP server."""
-    state = _load_state_or_exit()
+    state = load_state_or_exit()
+    from coros_cli.mcp.session import build_client
+
+    async def _list() -> list[dict[str, object]]:
+        fresh = await ensure_fresh(state)
+        client = build_client(fresh, save_mcp_state)
+        async with client:
+            return await client.list_tools()
+
     try:
-        listed = asyncio.run(_list_tools(state))
+        listed = asyncio.run(_list())
     except (McpClientError, McpOAuthError, RuntimeError) as e:
         err_console.print(f"[red]MCP error:[/red] {e}")
         raise typer.Exit(1) from e
 
     if json_output:
-        _emit_json(listed)
+        emit_json(listed)
         return
     if not listed:
         console.print("[yellow]The MCP server exposes no tools.[/yellow]")
@@ -172,24 +163,13 @@ def call(
     ] = False,
 ) -> None:
     """Invoke an MCP tool by name with JSON arguments."""
-    state = _load_state_or_exit()
     try:
         arguments = json.loads(args)
     except json.JSONDecodeError as e:
         raise typer.BadParameter(f"--args is not valid JSON: {e}") from e
     if not isinstance(arguments, dict):
         raise typer.BadParameter("--args must be a JSON object")
-
-    try:
-        result = asyncio.run(_call_tool(state, tool, arguments))
-    except (McpClientError, McpOAuthError, RuntimeError) as e:
-        err_console.print(f"[red]MCP error:[/red] {e}")
-        raise typer.Exit(1) from e
-
-    if json_output:
-        _emit_json(result)
-        return
-    _render_tool_result(result)
+    render_result(call_tool(tool, arguments), json_output=json_output)
 
 
 @mcp_app.command("revoke")
@@ -205,31 +185,3 @@ def revoke_cmd() -> None:
         err_console.print(f"[yellow]Revocation request failed ({e}); clearing local file anyway.")
     clear_mcp_state()
     console.print("[green]Revoked[/green] — local MCP credentials removed.")
-
-
-async def _list_tools(state: McpOAuthState) -> list[dict[str, Any]]:
-    state = await ensure_fresh(state)
-    client = build_client(state, save_mcp_state)
-    async with client:
-        return await client.list_tools()
-
-
-async def _call_tool(state: McpOAuthState, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    state = await ensure_fresh(state)
-    client = build_client(state, save_mcp_state)
-    async with client:
-        return await client.call_tool(tool, arguments)
-
-
-def _render_tool_result(result: dict[str, Any]) -> None:
-    if result.get("isError"):
-        err_console.print("[red]Tool reported an error.[/red]")
-    content = result.get("content")
-    if not isinstance(content, list) or not content:
-        _emit_json(result)
-        return
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "text":
-            console.print(block.get("text", ""))
-        else:
-            _emit_json(block)

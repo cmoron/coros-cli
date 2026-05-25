@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-from coros_cli.config import config_dir
 from coros_cli.mcp.models import McpOAuthState
 
 
+def _config_dir() -> Path:
+    """Per-user config directory, honouring XDG_CONFIG_HOME."""
+    base = os.environ.get("XDG_CONFIG_HOME")
+    return Path(base) / "coros-cli" if base else Path.home() / ".config" / "coros-cli"
+
+
 def mcp_oauth_path() -> Path:
-    """Path of the MCP OAuth credential file, separate from the mobile login."""
-    return config_dir() / "mcp-oauth.json"
+    """Path of the MCP OAuth credential file."""
+    return _config_dir() / "mcp-oauth.json"
 
 
 def load_mcp_state() -> McpOAuthState | None:
