@@ -65,9 +65,7 @@ async def test_register_client_raises_on_error(httpx_mock: HTTPXMock) -> None:
 
 
 def test_build_authorization_url_carries_pkce_and_state() -> None:
-    url = build_authorization_url(
-        META, CLIENT, state="st-123", code_challenge="chal-xyz"
-    )
+    url = build_authorization_url(META, CLIENT, state="st-123", code_challenge="chal-xyz")
     parsed = urlparse(url)
     assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == META.authorization_endpoint
     params = parse_qs(parsed.query)
@@ -125,9 +123,7 @@ async def test_exchange_code_returns_token(httpx_mock: HTTPXMock) -> None:
         },
     )
     async with httpx.AsyncClient() as http:
-        token = await exchange_code(
-            http, META, CLIENT, code="auth-code", code_verifier="verif-1"
-        )
+        token = await exchange_code(http, META, CLIENT, code="auth-code", code_verifier="verif-1")
     assert token.access_token == "acc-tok"
     assert token.refresh_token == "ref-tok"
 
