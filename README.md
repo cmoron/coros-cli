@@ -49,7 +49,8 @@ All data commands share these flags where they make sense:
 
 - `--days N` — number of recent days to query (default 7)
 - `--from YYYY-MM-DD` / `--to YYYY-MM-DD` — explicit date range
-- `--tz IANA` — timezone for date bucketing (defaults to system timezone)
+Dates use the timezone configured in your COROS account; `--tz` is no longer supported.
+Sleep dates refer to the wake-up day. HRV queries support at most 7 recent days.
 - `--json` — emit the raw MCP tool result as JSON on stdout
 
 | Command | What it returns |
@@ -96,8 +97,8 @@ COROS ships a tool the CLI does not yet wrap.
 coros mcp tools                       # list server tools
 coros mcp tools --json                # full JSON schemas
 coros mcp call queryUserInfo          # invoke a tool with no arguments
-coros mcp call querySleepData \
-  --args '{"days": 3, "timezone": "Europe/Paris",
+coros mcp call querySleepOverview \
+  --args '{"days": 3,
            "startDate": "20260523", "endDate": "20260525"}'
 ```
 
@@ -111,3 +112,6 @@ uv run mypy src/ tests/
 
 Tests don't touch the network: the OAuth + MCP transport are unit-tested with
 mocked HTTP, and the CLI tests stub out `runner.call_tool`.
+
+COROS no longer exposes `analyzeActivityDetail`; `coros analyze` is currently unavailable.
+Use `coros activity <id> -s <code>` to retrieve the metrics for your own analysis.

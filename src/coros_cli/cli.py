@@ -8,7 +8,7 @@ import typer
 from coros_cli.mcp.commands import auth as mcp_auth
 from coros_cli.mcp.commands import mcp_app
 from coros_cli.mcp.commands import revoke_cmd as mcp_revoke
-from coros_cli.mcp.runner import default_timezone, run
+from coros_cli.mcp.runner import run
 
 _APP_HELP = """\
 COROS CLI — talk to the official COROS MCP backend.
@@ -18,7 +18,7 @@ then any of the data commands below. Credentials live in
 ~/.config/coros-cli/mcp-oauth.json (mode 0600).
 
 Most commands accept `--days N`, `--from YYYY-MM-DD`, `--to YYYY-MM-DD`,
-`--tz <IANA>` and `--json`. Run `coros <command> --help` for details.
+`--json`. Run `coros <command> --help` for details.
 """
 
 app = typer.Typer(help=_APP_HELP, no_args_is_help=True)
@@ -49,10 +49,6 @@ def _date_range(from_: str | None, to: str | None, days: int) -> tuple[str, str]
         start_dt = datetime.strptime(end, "%Y%m%d").date() - timedelta(days=days - 1)
         start = start_dt.strftime("%Y%m%d")
     return start, end
-
-
-def _tz(tz: str | None) -> str:
-    return tz or default_timezone()
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +89,6 @@ def devices(
 _DAYS = Annotated[int, typer.Option(help="Number of recent days to query.")]
 _FROM = Annotated[str | None, typer.Option("--from", help="Start date YYYY-MM-DD or YYYYMMDD.")]
 _TO = Annotated[str | None, typer.Option("--to", help="End date YYYY-MM-DD or YYYYMMDD.")]
-_TZ = Annotated[str | None, typer.Option("--tz", help="IANA timezone (defaults to system).")]
 _JSON = Annotated[bool, typer.Option("--json", help="Emit the raw tool result as JSON.")]
 
 
@@ -102,14 +97,16 @@ def sleep(
     days: _DAYS = 7,
     from_: _FROM = None,
     to: _TO = None,
-    tz: _TZ = None,
     json_output: _JSON = False,
 ) -> None:
     """Sleep score, duration, deep/light/REM ratios, awake count, naps."""
-    start, end = _date_range(from_, to, days)
+    args: dict[str, object] = {"days": days}
+    if from_ or to:
+        start, end = _date_range(from_, to, days)
+        args.update(startDate=start, endDate=end)
     run(
-        "querySleepData",
-        {"startDate": start, "endDate": end, "days": days, "timezone": _tz(tz)},
+        "querySleepOverview",
+        args,
         json_output=json_output,
     )
 
@@ -117,13 +114,12 @@ def sleep(
 @app.command()
 def health(
     days: _DAYS = 7,
-    tz: _TZ = None,
     json_output: _JSON = False,
 ) -> None:
     """Daily wellness summary: steps, calories, HR, stress, sleep."""
     run(
         "queryDailyHealthData",
-        {"days": days, "timezone": _tz(tz)},
+        {"days": days},
         json_output=json_output,
     )
 
@@ -131,13 +127,12 @@ def health(
 @app.command()
 def hr(
     days: _DAYS = 7,
-    tz: _TZ = None,
     json_output: _JSON = False,
 ) -> None:
     """Daily average heart rate."""
     run(
         "queryAvgHeartRate",
-        {"days": days, "timezone": _tz(tz)},
+        {"days": days},
         json_output=json_output,
     )
 
@@ -145,27 +140,25 @@ def hr(
 @app.command()
 def resting(
     days: _DAYS = 7,
-    tz: _TZ = None,
     json_output: _JSON = False,
 ) -> None:
     """Daily resting heart rate."""
     run(
         "queryRestingHeartRate",
-        {"days": days, "timezone": _tz(tz)},
+        {"days": days},
         json_output=json_output,
     )
 
 
 @app.command()
 def hrv(
-    days: _DAYS = 7,
-    tz: _TZ = None,
+    days: Annotated[int, typer.Option(min=1, max=7, help="Recent days (maximum 7).")] = 7,
     json_output: _JSON = False,
 ) -> None:
     """Daily HRV assessment (average, normal range, evaluation)."""
     run(
-        "queryHrvAssessment",
-        {"days": days, "timezone": _tz(tz)},
+        "querySleepHrv",
+        {"days": days},
         json_output=json_output,
     )
 
@@ -173,13 +166,12 @@ def hrv(
 @app.command()
 def stress(
     days: _DAYS = 7,
-    tz: _TZ = None,
     json_output: _JSON = False,
 ) -> None:
     """Daily average stress level."""
     run(
         "queryStressLevel",
-        {"days": days, "timezone": _tz(tz)},
+        {"days": days},
         json_output=json_output,
     )
 
@@ -215,14 +207,13 @@ def schedule(
     from_: _FROM = None,
     to: _TO = None,
     days: _DAYS = 7,
-    tz: _TZ = None,
     json_output: _JSON = False,
 ) -> None:
     """Training schedule for the requested date range (defaults to this week)."""
     start, end = _date_range(from_, to, days)
     run(
         "queryTrainingSchedule",
-        {"startDate": start, "endDate": end, "timezone": _tz(tz)},
+        {"startDate": start, "endDate": end},
         json_output=json_output,
     )
 
@@ -311,7 +302,6 @@ def activities(
         str | None, typer.Option("--location", help="Location keyword (city, park…).")
     ] = None,
     limit: Annotated[int, typer.Option("--limit", help="Max records to return.")] = 20,
-    tz: _TZ = None,
     json_output: _JSON = False,
 ) -> None:
     """List workouts with optional date / sport / distance / duration filters."""
@@ -327,7 +317,6 @@ def activities(
         "maxAveragePace": max_pace,
         "locationKeyword": location,
         "limit": limit,
-        "timezone": _tz(tz),
     }
     run("querySportRecords", args, json_output=json_output)
 

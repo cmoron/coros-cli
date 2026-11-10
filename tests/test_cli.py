@@ -54,30 +54,30 @@ def test_profile_calls_query_user_info(
     assert "ok" in result.stdout
 
 
-def test_sleep_passes_date_range_and_default_tz(
+def test_sleep_passes_date_range(
     captured_calls: list[tuple[str, dict[str, Any]]],
 ) -> None:
     result = _invoke("sleep", "--days", "3", "--to", "2026-05-25")
     assert result.exit_code == 0
     tool, args = captured_calls[0]
-    assert tool == "querySleepData"
+    assert tool == "querySleepOverview"
     assert args["endDate"] == "20260525"
     assert args["startDate"] == "20260523"
     assert args["days"] == 3
-    assert args["timezone"] == "Europe/Paris"
+    assert "timezone" not in args
 
 
-def test_sleep_explicit_tz_overrides_default(
+def test_sleep_rejects_unsupported_timezone(
     captured_calls: list[tuple[str, dict[str, Any]]],
 ) -> None:
     result = _invoke("sleep", "--days", "1", "--tz", "Asia/Tokyo")
-    assert result.exit_code == 0
-    assert captured_calls[0][1]["timezone"] == "Asia/Tokyo"
+    assert result.exit_code != 0
+    assert captured_calls == []
 
 
-def test_hrv_passes_days_and_tz(captured_calls: list[tuple[str, dict[str, Any]]]) -> None:
-    _invoke("hrv", "--days", "14")
-    assert captured_calls == [("queryHrvAssessment", {"days": 14, "timezone": "Europe/Paris"})]
+def test_hrv_passes_days(captured_calls: list[tuple[str, dict[str, Any]]]) -> None:
+    _invoke("hrv", "--days", "7")
+    assert captured_calls == [("querySleepHrv", {"days": 7})]
 
 
 def test_load_passes_days_only(captured_calls: list[tuple[str, dict[str, Any]]]) -> None:
@@ -163,3 +163,29 @@ def test_json_flag_emits_raw_payload(
     assert result.exit_code == 0
     assert '"content"' in result.stdout
     assert '"isError": false' in result.stdout
+
+
+def test_sleep_recent_days_uses_coros_timezone(
+    captured_calls: list[tuple[str, dict[str, Any]]],
+) -> None:
+    result = _invoke("sleep", "--days", "3")
+    assert result.exit_code == 0
+    assert captured_calls == [("querySleepOverview", {"days": 3})]
+
+
+@pytest.mark.parametrize("command", ["health", "hr", "resting", "stress", "schedule", "activities"])
+def test_commands_do_not_send_timezone(
+    command: str,
+    captured_calls: list[tuple[str, dict[str, Any]]],
+) -> None:
+    result = _invoke(command)
+    assert result.exit_code == 0
+    assert "timezone" not in captured_calls[0][1]
+
+
+def test_hrv_rejects_more_than_seven_days(
+    captured_calls: list[tuple[str, dict[str, Any]]],
+) -> None:
+    result = _invoke("hrv", "--days", "8")
+    assert result.exit_code != 0
+    assert captured_calls == []
