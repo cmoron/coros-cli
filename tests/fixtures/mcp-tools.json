@@ -1,0 +1,328 @@
+{
+  "queryActivityLapData": {
+    "readOnly": true,
+    "properties": {
+      "labelId": "string",
+      "sportType": "integer"
+    },
+    "required": [
+      "labelId",
+      "sportType"
+    ]
+  },
+  "queryCustomActivityLapData": {
+    "readOnly": true,
+    "properties": {
+      "labelId": "string",
+      "sportType": "integer",
+      "startTimestamp": "integer",
+      "endTimestamp": "integer"
+    },
+    "required": [
+      "labelId",
+      "sportType",
+      "startTimestamp",
+      "endTimestamp"
+    ]
+  },
+  "getActivityDetail": {
+    "readOnly": true,
+    "properties": {
+      "labelId": "string",
+      "sportType": "integer"
+    },
+    "required": [
+      "labelId",
+      "sportType"
+    ]
+  },
+  "queryDailyHealthData": {
+    "readOnly": true,
+    "properties": {
+      "days": "integer"
+    },
+    "required": []
+  },
+  "querySleepOverview": {
+    "readOnly": true,
+    "properties": {
+      "startDate": "string",
+      "endDate": "string",
+      "days": "integer"
+    },
+    "required": []
+  },
+  "queryDevices": {
+    "readOnly": true,
+    "properties": {},
+    "required": []
+  },
+  "queryFitnessAssessmentOverview": {
+    "readOnly": true,
+    "properties": {},
+    "required": []
+  },
+  "queryTrainingLoadAssessment": {
+    "readOnly": true,
+    "properties": {
+      "days": "integer"
+    },
+    "required": []
+  },
+  "queryRecoveryStatus": {
+    "readOnly": true,
+    "properties": {},
+    "required": []
+  },
+  "queryMenstruationCycles": {
+    "readOnly": true,
+    "properties": {
+      "startDay": "integer",
+      "endDay": "integer"
+    },
+    "required": []
+  },
+  "uploadRouteFile": {
+    "readOnly": false,
+    "properties": {
+      "fileName": "string",
+      "fileContent": "string",
+      "routeName": "string",
+      "routeType": "integer"
+    },
+    "required": [
+      "fileName",
+      "fileContent",
+      "routeType"
+    ]
+  },
+  "querySportRecords": {
+    "readOnly": true,
+    "properties": {
+      "startDate": "string",
+      "endDate": "string",
+      "sportTypeCodes": "array",
+      "minDistanceKm": "number",
+      "maxDistanceKm": "number",
+      "minDurationMinutes": "integer",
+      "maxDurationMinutes": "integer",
+      "maxAveragePace": "string",
+      "locationKeyword": "string",
+      "limit": "integer"
+    },
+    "required": []
+  },
+  "queryAvgHeartRate": {
+    "readOnly": true,
+    "properties": {
+      "startDate": "string",
+      "endDate": "string",
+      "days": "integer"
+    },
+    "required": []
+  },
+  "queryRestingHeartRate": {
+    "readOnly": true,
+    "properties": {
+      "days": "integer"
+    },
+    "required": []
+  },
+  "querySleepHrv": {
+    "readOnly": true,
+    "properties": {
+      "startDate": "string",
+      "endDate": "string",
+      "days": "integer"
+    },
+    "required": []
+  },
+  "queryStressLevel": {
+    "readOnly": true,
+    "properties": {
+      "days": "integer"
+    },
+    "required": []
+  },
+  "queryHealthCheckTimeSeries": {
+    "readOnly": true,
+    "properties": {
+      "startDate": "string",
+      "endDate": "string",
+      "days": "integer"
+    },
+    "required": []
+  },
+  "queryStressTimeSeries": {
+    "readOnly": true,
+    "properties": {
+      "startDate": "string",
+      "endDate": "string",
+      "days": "integer"
+    },
+    "required": []
+  },
+  "createScheduledWorkout": {
+    "readOnly": false,
+    "properties": {
+      "date": "string",
+      "course": "object"
+    },
+    "required": [
+      "date",
+      "course"
+    ]
+  },
+  "queryScheduledWorkoutDetails": {
+    "readOnly": true,
+    "properties": {
+      "date": "string",
+      "idInPlan": "string"
+    },
+    "required": [
+      "date",
+      "idInPlan"
+    ]
+  },
+  "updateScheduledWorkout": {
+    "readOnly": false,
+    "properties": {
+      "date": "string",
+      "idInPlan": "string",
+      "course": "object"
+    },
+    "required": [
+      "date",
+      "idInPlan",
+      "course"
+    ]
+  },
+  "createTrainingPlan": {
+    "readOnly": false,
+    "properties": {
+      "planInfo": "object",
+      "courseList": "array",
+      "phaseInfo": "object"
+    },
+    "required": [
+      "planInfo",
+      "courseList",
+      "phaseInfo"
+    ]
+  },
+  "queryTrainingPlanDetails": {
+    "readOnly": true,
+    "properties": {
+      "planId": "string",
+      "startDay": "string",
+      "endDay": "string"
+    },
+    "required": [
+      "planId"
+    ]
+  },
+  "queryTrainingPlanLibrary": {
+    "readOnly": true,
+    "properties": {
+      "statusList": "array",
+      "planType": "string",
+      "weeks": "integer",
+      "cursor": "string"
+    },
+    "required": []
+  },
+  "updateTrainingPlan": {
+    "readOnly": false,
+    "properties": {
+      "planInfo": "object",
+      "courseList": "array",
+      "phaseInfo": "object"
+    },
+    "required": [
+      "planInfo"
+    ]
+  },
+  "queryTrainingSchedule": {
+    "readOnly": true,
+    "properties": {
+      "startDate": "string",
+      "endDate": "string"
+    },
+    "required": []
+  },
+  "createSingleWorkout": {
+    "readOnly": false,
+    "properties": {
+      "course": "object"
+    },
+    "required": [
+      "course"
+    ]
+  },
+  "queryWorkoutDetails": {
+    "readOnly": true,
+    "properties": {
+      "workoutId": "string"
+    },
+    "required": [
+      "workoutId"
+    ]
+  },
+  "queryWorkoutLibrary": {
+    "readOnly": true,
+    "properties": {
+      "sportType": "integer",
+      "courseType": "string"
+    },
+    "required": []
+  },
+  "scheduleWorkout": {
+    "readOnly": false,
+    "properties": {
+      "workoutId": "string",
+      "date": "string"
+    },
+    "required": [
+      "workoutId",
+      "date"
+    ]
+  },
+  "updateWorkoutDetails": {
+    "readOnly": false,
+    "properties": {
+      "workoutId": "string",
+      "course": "object"
+    },
+    "required": [
+      "workoutId",
+      "course"
+    ]
+  },
+  "queryUserInfo": {
+    "readOnly": true,
+    "properties": {},
+    "required": []
+  },
+  "downloadActivityFitFiles": {
+    "readOnly": true,
+    "properties": {
+      "endDate": "string",
+      "limit": "integer",
+      "startDate": "string",
+      "labelId": "string",
+      "sportType": "integer"
+    },
+    "required": []
+  },
+  "queryActivityFitFileDownloadUrls": {
+    "readOnly": true,
+    "properties": {
+      "endDate": "string",
+      "limit": "integer",
+      "startDate": "string",
+      "labelId": "string",
+      "sportType": "integer"
+    },
+    "required": []
+  }
+}

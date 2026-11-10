@@ -29,8 +29,6 @@ def captured_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
 
     # Patch on both the runner module (canonical) and cli.run's binding.
     monkeypatch.setattr(runner, "call_tool", fake_call_tool)
-    # Force a deterministic default timezone so we can assert on it.
-    monkeypatch.setattr(runner, "default_timezone", lambda: "Europe/Paris")
     return calls
 
 
@@ -138,16 +136,13 @@ def test_activity_passes_label_and_sport(
     assert captured_calls == [("getActivityDetail", {"labelId": "label-1", "sportType": 100})]
 
 
-def test_analyze_passes_focus(
+def test_analyze_explains_removed_tool(
     captured_calls: list[tuple[str, dict[str, Any]]],
 ) -> None:
-    _invoke("analyze", "label-1", "-s", "100", "--focus", "pace stability")
-    assert captured_calls == [
-        (
-            "analyzeActivityDetail",
-            {"labelId": "label-1", "sportType": 100, "focus": "pace stability"},
-        )
-    ]
+    result = _invoke("analyze")
+    assert result.exit_code != 0
+    assert "COROS removed" in result.output
+    assert captured_calls == []
 
 
 def test_invalid_date_is_rejected(captured_calls: list[tuple[str, dict[str, Any]]]) -> None:
@@ -189,3 +184,133 @@ def test_hrv_rejects_more_than_seven_days(
     result = _invoke("hrv", "--days", "8")
     assert result.exit_code != 0
     assert captured_calls == []
+
+
+@pytest.mark.parametrize("command", ["hr", "hrv"])
+def test_health_commands_accept_explicit_dates(
+    command: str,
+    captured_calls: list[tuple[str, dict[str, Any]]],
+) -> None:
+    result = _invoke(command, "--from", "2026-11-01", "--to", "2026-11-02")
+    assert result.exit_code == 0, result.output
+    assert captured_calls[0][1] == {
+        "startDate": "20261101",
+        "endDate": "20261102",
+        "days": 7,
+    }
+
+
+def test_schedule_defaults_to_coros_current_week(
+    captured_calls: list[tuple[str, dict[str, Any]]],
+) -> None:
+    assert _invoke("schedule").exit_code == 0
+    assert captured_calls == [("queryTrainingSchedule", {})]
+
+
+def test_laps_alias_passes_json_arguments(
+    captured_calls: list[tuple[str, dict[str, Any]]],
+) -> None:
+    result = _invoke("laps", "--args", '{"labelId":"run-1","sportType":100}', "--json")
+    assert result.exit_code == 0, result.output
+    assert captured_calls == [("queryActivityLapData", {"labelId": "run-1", "sportType": 100})]
+    assert '"content"' in result.stdout
+
+
+@pytest.mark.parametrize("args", ["[]", "invalid"])
+def test_laps_rejects_invalid_json(
+    args: str,
+    captured_calls: list[tuple[str, dict[str, Any]]],
+) -> None:
+    result = _invoke("laps", "--args", args)
+    assert result.exit_code != 0
+    assert "JSON" in result.output
+    assert captured_calls == []
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_tool_error_sets_failure_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+    json_output: bool,
+) -> None:
+    monkeypatch.setattr(
+        runner,
+        "call_tool",
+        lambda *_: {
+            "isError": True,
+            "content": [{"type": "text", "text": "server rejected request"}],
+        },
+    )
+    result = _invoke("profile", *(["--json"] if json_output else []))
+    assert result.exit_code == 1
+    assert "server rejected request" in result.stdout
+
+
+# Top-level schema snapshot from the live EU MCP tools/list, 2026-11-10.
+READ_CASES = [
+    ("profile", {}),
+    ("devices", {}),
+    ("sleep", {}),
+    ("health", {}),
+    ("hr", {}),
+    ("resting", {}),
+    ("hrv", {}),
+    ("stress", {}),
+    ("recovery", {}),
+    ("load", {}),
+    ("schedule", {}),
+    ("fitness", {}),
+    ("activities", {}),
+    ("activity", {}),
+    ("laps", {"labelId": "run-1", "sportType": 100}),
+    (
+        "laps-window",
+        {
+            "labelId": "run-1",
+            "sportType": 100,
+            "startTimestamp": 1794222000,
+            "endTimestamp": 1794222300,
+        },
+    ),
+    ("cycles", {}),
+    ("health-check", {}),
+    ("stress-series", {}),
+    ("scheduled-workout", {"date": "20261110", "idInPlan": "session-1"}),
+    ("plan", {"planId": "plan-1"}),
+    ("plans", {}),
+    ("workout", {"workoutId": "workout-1"}),
+    ("workouts", {}),
+    ("fit-files", {"labelId": "run-1", "sportType": 100}),
+    ("fit-urls", {"labelId": "run-1", "sportType": 100}),
+]
+
+
+def test_all_read_tools_are_reachable_with_valid_arguments(
+    captured_calls: list[tuple[str, dict[str, Any]]],
+) -> None:
+    import json
+    from pathlib import Path
+
+    schemas = json.loads((Path(__file__).parent / "fixtures/mcp-tools.json").read_text())
+    types: dict[str, type | tuple[type, ...]] = {
+        "integer": int,
+        "string": str,
+        "array": list,
+        "number": (float, int),
+        "object": dict,
+    }
+    for command, args in READ_CASES:
+        flags = ["--args", json.dumps(args)] if args else []
+        if command == "activity":
+            flags = ["run-1", "-s", "100"]
+        result = _invoke(command, *flags)
+        assert result.exit_code == 0, result.output
+        tool, arguments = captured_calls[-1]
+        schema = schemas[tool]
+        assert set(arguments) <= schema["properties"].keys(), tool
+        assert set(schema["required"]) <= arguments.keys(), tool
+        for key, value in arguments.items():
+            expected_type = types[schema["properties"][key]]
+            assert isinstance(value, expected_type), (tool, key, value)
+    assert {tool for tool, _ in captured_calls} == {
+        name for name, schema in schemas.items() if schema["readOnly"]
+    }

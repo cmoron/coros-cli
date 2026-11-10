@@ -5,6 +5,7 @@ from typing import Annotated
 
 import typer
 
+from coros_cli.mcp.aliases import register_commands
 from coros_cli.mcp.commands import auth as mcp_auth
 from coros_cli.mcp.commands import mcp_app
 from coros_cli.mcp.commands import revoke_cmd as mcp_revoke
@@ -23,6 +24,7 @@ Most commands accept `--days N`, `--from YYYY-MM-DD`, `--to YYYY-MM-DD`,
 
 app = typer.Typer(help=_APP_HELP, no_args_is_help=True)
 app.add_typer(mcp_app, name="mcp")
+register_commands(app)
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +51,14 @@ def _date_range(from_: str | None, to: str | None, days: int) -> tuple[str, str]
         start_dt = datetime.strptime(end, "%Y%m%d").date() - timedelta(days=days - 1)
         start = start_dt.strftime("%Y%m%d")
     return start, end
+
+
+def _recent_dates(from_: str | None, to: str | None, days: int) -> dict[str, object]:
+    args: dict[str, object] = {"days": days}
+    if from_ or to:
+        start, end = _date_range(from_, to, days)
+        args.update(startDate=start, endDate=end)
+    return args
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +96,7 @@ def devices(
 # ---------------------------------------------------------------------------
 
 
-_DAYS = Annotated[int, typer.Option(help="Number of recent days to query.")]
+_DAYS = Annotated[int, typer.Option(min=1, help="Number of recent days to query.")]
 _FROM = Annotated[str | None, typer.Option("--from", help="Start date YYYY-MM-DD or YYYYMMDD.")]
 _TO = Annotated[str | None, typer.Option("--to", help="End date YYYY-MM-DD or YYYYMMDD.")]
 _JSON = Annotated[bool, typer.Option("--json", help="Emit the raw tool result as JSON.")]
@@ -100,13 +110,9 @@ def sleep(
     json_output: _JSON = False,
 ) -> None:
     """Sleep score, duration, deep/light/REM ratios, awake count, naps."""
-    args: dict[str, object] = {"days": days}
-    if from_ or to:
-        start, end = _date_range(from_, to, days)
-        args.update(startDate=start, endDate=end)
     run(
         "querySleepOverview",
-        args,
+        _recent_dates(from_, to, days),
         json_output=json_output,
     )
 
@@ -127,12 +133,14 @@ def health(
 @app.command()
 def hr(
     days: _DAYS = 7,
+    from_: _FROM = None,
+    to: _TO = None,
     json_output: _JSON = False,
 ) -> None:
     """Daily average heart rate."""
     run(
         "queryAvgHeartRate",
-        {"days": days},
+        _recent_dates(from_, to, days),
         json_output=json_output,
     )
 
@@ -153,12 +161,14 @@ def resting(
 @app.command()
 def hrv(
     days: Annotated[int, typer.Option(min=1, max=7, help="Recent days (maximum 7).")] = 7,
+    from_: _FROM = None,
+    to: _TO = None,
     json_output: _JSON = False,
 ) -> None:
     """Daily HRV assessment (average, normal range, evaluation)."""
     run(
         "querySleepHrv",
-        {"days": days},
+        _recent_dates(from_, to, days),
         json_output=json_output,
     )
 
@@ -206,14 +216,22 @@ def load(
 def schedule(
     from_: _FROM = None,
     to: _TO = None,
-    days: _DAYS = 7,
+    days: Annotated[int | None, typer.Option(min=1)] = None,
     json_output: _JSON = False,
 ) -> None:
     """Training schedule for the requested date range (defaults to this week)."""
-    start, end = _date_range(from_, to, days)
+    args: dict[str, object] = {}
+    if days is not None:
+        start, end = _date_range(from_, to, days)
+        args.update(startDate=start, endDate=end)
+    else:
+        if from_:
+            args["startDate"] = _parse_date(from_)
+        if to:
+            args["endDate"] = _parse_date(to)
     run(
         "queryTrainingSchedule",
-        {"startDate": start, "endDate": end},
+        args,
         json_output=json_output,
     )
 
@@ -318,7 +336,11 @@ def activities(
         "locationKeyword": location,
         "limit": limit,
     }
-    run("querySportRecords", args, json_output=json_output)
+    run(
+        "querySportRecords",
+        {key: value for key, value in args.items() if value is not None},
+        json_output=json_output,
+    )
 
 
 @app.command()
@@ -343,30 +365,11 @@ def activity(
 
 
 @app.command()
-def analyze(
-    label_id: Annotated[str, typer.Argument(help="The activity labelId.")],
-    sport_type: Annotated[
-        int,
-        typer.Option(
-            "--sport-type",
-            "-s",
-            help="COROS sport type code (e.g. 100=outdoor run, 200=outdoor bike).",
-        ),
-    ],
-    focus: Annotated[
-        str | None,
-        typer.Option(
-            "--focus",
-            help="Optional analysis focus, e.g. 'pace stability', 'heart rate'.",
-        ),
-    ] = None,
-    json_output: _JSON = False,
-) -> None:
-    """Coach-style analysis of an activity in plain language."""
-    run(
-        "analyzeActivityDetail",
-        {"labelId": label_id, "sportType": sport_type, "focus": focus or ""},
-        json_output=json_output,
+def analyze() -> None:
+    """Removed by COROS; use `coros activity` to retrieve metrics for analysis."""
+    raise typer.BadParameter(
+        "COROS removed analyzeActivityDetail. Use `coros activity <id> -s <code>` "
+        "to retrieve metrics for your own analysis."
     )
 
 

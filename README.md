@@ -24,7 +24,7 @@ uv run coros auth                 # OAuth in your browser, runs once
 uv run coros profile              # height, weight, birthday, gender
 uv run coros sleep --days 7       # last 7 nights
 uv run coros activities --sport run --days 14
-uv run coros analyze <labelId> -s 100 --focus "pace stability"
+uv run coros activity <labelId> -s 100
 ```
 
 ## Authentication
@@ -69,7 +69,13 @@ Sleep dates refer to the wake-up day. HRV queries support at most 7 recent days.
 | `coros fitness` | VO2max, running level, threshold pace, race predictions |
 | `coros activities` | Workouts with filters (date, sport, distance, duration…) |
 | `coros activity <id>` | Detailed metrics for one activity |
-| `coros analyze <id>` | Coach-style analysis of one activity |
+| `coros laps` / `coros laps-window` | Recorded laps / metrics over a timestamp window |
+| `coros cycles` | Menstrual cycle data |
+| `coros health-check` / `coros stress-series` | Detailed health / stress time series |
+| `coros plans` / `coros plan` | Training plan library / details |
+| `coros workouts` / `coros workout` | Workout library / details |
+| `coros scheduled-workout` | Details of a scheduled session |
+| `coros fit-files` / `coros fit-urls` | FIT resources / download URLs |
 
 ### Activity filters
 
@@ -83,10 +89,40 @@ coros activities --sport 100,bike --days 30 --limit 50
 coros activities --from 2026-04-01 --to 2026-04-30 --location Marseille
 ```
 
-`coros activity` and `coros analyze` both require the activity's `labelId` and
-its `--sport-type` (visible in `coros activities` output). `--focus` on
-`coros analyze` is a free-text hint sent to the server (e.g. `"pace stability"`,
-`"heart rate"`, `"cadence"`).
+`coros activity` requires the activity's `labelId` and `--sport-type`
+(visible in `coros activities` output). `coros analyze` has been removed by
+COROS and exits with a migration hint; retrieve the activity metrics instead.
+
+`hr` and `hrv` also accept `--from` / `--to`. Without dates, COROS resolves
+recent days in your account timezone. `schedule` without flags returns the
+current Monday–Sunday week; `--days N` explicitly requests the recent N days.
+
+### Structured MCP arguments
+
+The new commands in the table above accept `--args` as a JSON object, using
+exact MCP field names, plus `--json` for raw output. The server validates
+nested input structures. Inspect complete schemas and descriptions with
+`coros mcp tools --json`.
+
+```sh
+coros laps --args '{"labelId":"ACTIVITY_ID","sportType":100}'
+coros laps-window --args '{"labelId":"ACTIVITY_ID","sportType":100,"startTimestamp":1794222000,"endTimestamp":1794222300}'
+coros health-check --args '{"days":7}'
+coros stress-series --args '{"days":1}'
+coros cycles --args '{"startDay":20261101,"endDay":20261130}'
+coros plans
+coros plan --args '{"planId":"PLAN_ID"}'
+coros workouts
+coros workout --args '{"workoutId":"WORKOUT_ID"}'
+coros scheduled-workout --args '{"date":"20261110","idInPlan":"SESSION_ID"}'
+coros fit-urls --args '{"labelId":"ACTIVITY_ID","sportType":100,"limit":1}'
+```
+
+`health-check` and `stress-series` support at most 7 recent days, as does
+`hrv`; explicit dates can be passed using `startDate` / `endDate`.
+`fit-files --json` emits the MCP result including binary resources; it does
+not save `.fit` files to disk. `fit-urls` returns download links. Both count
+against COROS's daily FIT quota (at most 10 files per request).
 
 ## Escape hatch — raw MCP access
 

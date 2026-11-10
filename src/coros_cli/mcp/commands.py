@@ -11,12 +11,11 @@ from rich.table import Table
 from coros_cli.mcp.client import McpClientError
 from coros_cli.mcp.oauth import McpOAuthError
 from coros_cli.mcp.runner import (
-    call_tool,
     console,
     emit_json,
     err_console,
     load_state_or_exit,
-    render_result,
+    run,
 )
 from coros_cli.mcp.session import begin_authorization, complete_authorization, ensure_fresh, revoke
 from coros_cli.mcp.store import clear_mcp_state, load_mcp_state, mcp_oauth_path, save_mcp_state
@@ -169,7 +168,7 @@ def call(
         raise typer.BadParameter(f"--args is not valid JSON: {e}") from e
     if not isinstance(arguments, dict):
         raise typer.BadParameter("--args must be a JSON object")
-    render_result(call_tool(tool, arguments), json_output=json_output)
+    run(tool, arguments, json_output=json_output)
 
 
 @mcp_app.command("revoke")

@@ -116,4 +116,7 @@ def render_result(result: dict[str, Any], *, json_output: bool) -> None:
 
 def run(tool: str, arguments: dict[str, Any], *, json_output: bool) -> None:
     """End-to-end helper: call the tool then render its result."""
-    render_result(call_tool(tool, arguments), json_output=json_output)
+    result = call_tool(tool, arguments)
+    render_result(result, json_output=json_output)
+    if result.get("isError"):
+        raise typer.Exit(1)
